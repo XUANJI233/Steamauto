@@ -12,14 +12,17 @@ jobs:
           - os: windows-latest
             arch: x64
             name: windows-x64
+            runner: windows-latest  # <--- 新增
           - os: ubuntu-latest
             arch: x64
             name: ubuntu-x64
+            runner: ubuntu-latest  # <--- 新增
           - os: ubuntu-latest
             arch: arm64
             name: ubuntu-arm64
+            runner: ubuntu-latest-arm64 # <--- 关键修改: 指定ARM运行器
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }} # <--- 关键修改: 使用matrix中定义的runner
     
     steps:
       - uses: actions/checkout@v4
@@ -32,19 +35,21 @@ jobs:
       - name: Install UPX (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          $url = "https://github.com/upx/upx/releases/download/v5.0.0/upx-5.0.0-win64.zip"
+          # PowerShell 脚本保持不变
+          $url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip" # 建议使用一个已知稳定的版本
           $output = "upx.zip"
           Invoke-WebRequest -Uri $url -OutFile $output
           Expand-Archive -Path $output -DestinationPath C:\upx_temp
           New-Item -ItemType Directory -Path C:\upx -Force
-          Move-Item C:\upx_temp\upx-5.0.0-win64\* C:\upx -Force
+          Move-Item C:\upx_temp\upx-*-win64\* C:\upx -Force
           Remove-Item C:\upx_temp, $output -Recurse -Force
 
       - name: Install UPX (Linux - x64 & ARM64)
+        # 此步骤无需修改，在ARM运行器上它会自动安装aarch64版本的upx
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y upx
+          sudo apt-get install -y upx-ucl
 
       - name: Install requirements and build
         shell: bash
@@ -53,27 +58,24 @@ jobs:
           pip install -r requirements.txt
           python .github/scripts/add_build_info.py
           
-          # 修复：移除 --name 参数，因为在使用 .spec 文件时不允许使用
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             pyinstaller build.spec --upx-dir C:\\upx
           else
             pyinstaller build.spec
           fi
 
-      - name: Rename output files (修复：在构建后重命名文件)
+      - name: Rename output files
         shell: bash
         run: |
           cd dist
-          # 根据操作系统和架构重命名输出文件
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Windows: 假设输出是 .exe 文件
             for file in *.exe; do
               if [ -f "$file" ]; then
                 mv "$file" "Steamauto-${{ matrix.name }}.exe"
               fi
             done
           else
-            # Linux: 假设输出是没有扩展名的可执行文件
+            # Linux下此逻辑同样适用于x86-64和aarch64
             for file in *; do
               if [ -f "$file" ] && [ -x "$file" ] && [[ "$file" != *"."* ]]; then
                 mv "$file" "Steamauto-${{ matrix.name }}"
@@ -116,6 +118,3 @@ jobs:
         with:
           commit: "master"
           tag: ${{ env.DATE }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: releases/*
-          prerelease: true
