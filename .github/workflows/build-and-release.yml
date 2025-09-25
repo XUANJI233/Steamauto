@@ -12,56 +12,74 @@ jobs:
           - os: windows-latest
             arch: x64
             name: windows-x64
-            runner: windows-latest  # <--- 新增
           - os: ubuntu-latest
             arch: x64
             name: ubuntu-x64
-            runner: ubuntu-latest  # <--- 新增
           - os: ubuntu-latest
             arch: arm64
             name: ubuntu-arm64
-            runner: ubuntu-latest-arm64 # <--- 关键修改: 指定ARM运行器
 
-    runs-on: ${{ matrix.runner }} # <--- 关键修改: 使用matrix中定义的runner
+    # <--- 修改: 恢复为使用 matrix.os，所有Linux任务都在标准x86-64运行器上执行
+    runs-on: ${{ matrix.os }} 
     
     steps:
       - uses: actions/checkout@v4
+
+      # <--- 新增: 仅在需要交叉编译arm64时，设置QEMU模拟器
+      - name: Set up QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.12"
 
-      - name: Install UPX (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          # PowerShell 脚本保持不变
-          $url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip" # 建议使用一个已知稳定的版本
-          $output = "upx.zip"
-          Invoke-WebRequest -Uri $url -OutFile $output
-          Expand-Archive -Path $output -DestinationPath C:\upx_temp
-          New-Item -ItemType Directory -Path C:\upx -Force
-          Move-Item C:\upx_temp\upx-*-win64\* C:\upx -Force
-          Remove-Item C:\upx_temp, $output -Recurse -Force
-
-      - name: Install UPX (Linux - x64 & ARM64)
-        # 此步骤无需修改，在ARM运行器上它会自动安装aarch64版本的upx
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y upx-ucl
-
-      - name: Install requirements and build
+      # <--- 修改: 将安装和构建步骤整合，并为不同平台提供不同逻辑
+      - name: Install dependencies and Build
         shell: bash
         run: |
-          pip install pyinstaller
-          pip install -r requirements.txt
-          python .github/scripts/add_build_info.py
-          
+          # ------------------- Windows Build -------------------
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "Running Windows x64 build..."
+            # Install UPX for Windows
+            $url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
+            $output = "upx.zip"
+            Invoke-WebRequest -Uri $url -OutFile $output
+            Expand-Archive -Path $output -DestinationPath C:\upx_temp
+            New-Item -ItemType Directory -Path C:\upx -Force
+            Move-Item C:\upx_temp\upx-*-win64\* C:\upx -Force
+            Remove-Item C:\upx_temp, $output -Recurse -Force
+            # Install Python deps and build
+            pip install pyinstaller
+            pip install -r requirements.txt
+            python .github/scripts/add_build_info.py
             pyinstaller build.spec --upx-dir C:\\upx
-          else
+
+          # ------------------- Linux Native x64 Build -------------------
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.arch }}" = "x64" ]; then
+            echo "Running Linux x64 native build..."
+            sudo apt-get update
+            sudo apt-get install -y upx-ucl
+            pip install pyinstaller
+            pip install -r requirements.txt
+            python .github/scripts/add_build_info.py
             pyinstaller build.spec
+
+          # ------------------- Linux Cross-Compile arm64 Build -------------------
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.arch }}" = "arm64" ]; then
+            echo "Running Linux arm64 cross-compile build..."
+            # 使用一个arm64架构的Docker容器来执行所有构建命令
+            # --platform linux/arm64 告诉Docker即使在x86主机上也要拉取和运行arm64镜像
+            # -v ${{ github.workspace }}:/src 将当前代码目录挂载到容器的/src目录
+            docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/src \
+              python:3.12-slim-bookworm \
+              sh -c "cd /src && \
+                apt-get update && apt-get install -y upx-ucl && \
+                pip install pyinstaller && \
+                pip install -r requirements.txt && \
+                python .github/scripts/add_build_info.py && \
+                pyinstaller build.spec"
           fi
 
       - name: Rename output files
@@ -75,7 +93,6 @@ jobs:
               fi
             done
           else
-            # Linux下此逻辑同样适用于x86-64和aarch64
             for file in *; do
               if [ -f "$file" ] && [ -x "$file" ] && [[ "$file" != *"."* ]]; then
                 mv "$file" "Steamauto-${{ matrix.name }}"
@@ -93,6 +110,7 @@ jobs:
   Publish:
     needs: Build
     runs-on: ubuntu-latest
+    # Publish Job 保持不变
     steps:
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@v2
