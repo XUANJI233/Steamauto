@@ -15,19 +15,24 @@ jobs:
           - os: ubuntu-latest
             arch: x64
             name: ubuntu-x64
-          - os: ubuntu-24.04-arm
-            arch: arm64
-            name: ubuntu-24.04-arm
+          - os: ubuntu-latest  # 修改：为了使用静态Python构建，我们可以在标准的ubuntu-latest上交叉编译或使用原生runner
+            arch: aarch64
+            name: ubuntu-arm64
 
     runs-on: ${{ matrix.os }}
     
     steps:
       - uses: actions/checkout@v4
 
+      # 关键修改：为所有构建设置Python，特别是为Linux构建使用静态链接的独立版本
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # 建议使用最新的主版本
         with:
           python-version: "3.12"
+          # 仅在Linux上使用独立（静态链接）的Python构建
+          # 这将下载一个使用 musl libc 编译的Python，从而生成静态链接的可执行文件
+          python-build: ${{ runner.os == 'Linux' && 'standalone' || '' }}
+          architecture: ${{ matrix.arch }}
 
       - name: Install UPX (Windows)
         if: matrix.os == 'windows-latest'
@@ -40,8 +45,9 @@ jobs:
           Move-Item C:\upx_temp\upx-5.0.0-win64\* C:\upx -Force
           Remove-Item C:\upx_temp, $output -Recurse -Force
 
-      - name: Install UPX (Linux - x64 & ARM64)
-        if: matrix.os == 'ubuntu-latest'
+      # 修复：确保在所有Linux构建（x64和ARM）上都安装UPX
+      - name: Install UPX (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y upx
@@ -53,32 +59,31 @@ jobs:
           pip install -r requirements.txt
           python .github/scripts/add_build_info.py
           
-          # 修复：移除 --name 参数，因为在使用 .spec 文件时不允许使用
+          # 对于Windows，指定UPX路径；对于Linux，UPX应该在PATH中
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             pyinstaller build.spec --upx-dir C:\\upx
           else
-            pyinstaller build.spec
+            pyinstaller build.spec --upx-dir /usr/bin/upx
           fi
 
-      - name: Rename output files (修复：在构建后重命名文件)
+      - name: Rename output files
         shell: bash
         run: |
           cd dist
-          # 根据操作系统和架构重命名输出文件
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Windows: 假设输出是 .exe 文件
-            for file in *.exe; do
-              if [ -f "$file" ]; then
-                mv "$file" "Steamauto-${{ matrix.name }}.exe"
-              fi
-            done
+            mv *.exe "Steamauto-${{ matrix.name }}.exe"
           else
-            # Linux: 假设输出是没有扩展名的可执行文件
-            for file in *; do
-              if [ -f "$file" ] && [ -x "$file" ] && [[ "$file" != *"."* ]]; then
-                mv "$file" "Steamauto-${{ matrix.name }}"
-              fi
-            done
+            # 找到dist目录下的主可执行文件并重命名
+            # PyInstaller生成的可执行文件名与.spec文件中的`name`字段一致
+            # 假设spec文件中的name是'main'或类似的
+            # 一个更稳健的方法是找到那个没有扩展名的可执行文件
+            EXECUTABLE_NAME=$(find . -maxdepth 1 -type f ! -name "*.*" | head -n 1)
+            if [ -n "$EXECUTABLE_NAME" ]; then
+              mv "$EXECUTABLE_NAME" "Steamauto-${{ matrix.name }}"
+            else
+              echo "Error: Could not find the executable to rename."
+              exit 1
+            fi
           fi
 
       - name: Upload artifacts
