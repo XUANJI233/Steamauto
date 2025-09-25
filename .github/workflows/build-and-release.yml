@@ -19,13 +19,11 @@ jobs:
             arch: arm64
             name: ubuntu-arm64
 
-    # <--- 修改: 恢复为使用 matrix.os，所有Linux任务都在标准x86-64运行器上执行
-    runs-on: ${{ matrix.os }} 
+    runs-on: ${{ matrix.os }}
     
     steps:
       - uses: actions/checkout@v4
 
-      # <--- 新增: 仅在需要交叉编译arm64时，设置QEMU模拟器
       - name: Set up QEMU
         if: matrix.arch == 'arm64'
         uses: docker/setup-qemu-action@v3
@@ -35,52 +33,54 @@ jobs:
         with:
           python-version: "3.12"
 
-      # <--- 修改: 将安装和构建步骤整合，并为不同平台提供不同逻辑
-      - name: Install dependencies and Build
+      # <--- 修改: 将Windows构建分为独立的一步，并使用pwsh
+      - name: Install and Build on Windows
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          echo "Running Windows x64 build..."
+          # Install UPX for Windows
+          $url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
+          $output = "upx.zip"
+          Invoke-WebRequest -Uri $url -OutFile $output
+          Expand-Archive -Path $output -DestinationPath "C:\upx_temp"
+          New-Item -ItemType Directory -Path "C:\upx" -Force
+          Move-Item "C:\upx_temp\upx-*\*" "C:\upx" -Force
+          Remove-Item "C:\upx_temp", $output -Recurse -Force
+          
+          # Install Python deps and build
+          pip install pyinstaller
+          pip install -r requirements.txt
+          python .github/scripts/add_build_info.py
+          pyinstaller build.spec --upx-dir "C:\upx"
+
+      # <--- 修改: 将Linux x64构建分为独立的一步
+      - name: Install and Build on Linux x64
+        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
         shell: bash
         run: |
-          # ------------------- Windows Build -------------------
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            echo "Running Windows x64 build..."
-            # Install UPX for Windows
-            $url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
-            $output = "upx.zip"
-            Invoke-WebRequest -Uri $url -OutFile $output
-            Expand-Archive -Path $output -DestinationPath C:\upx_temp
-            New-Item -ItemType Directory -Path C:\upx -Force
-            Move-Item C:\upx_temp\upx-*-win64\* C:\upx -Force
-            Remove-Item C:\upx_temp, $output -Recurse -Force
-            # Install Python deps and build
-            pip install pyinstaller
-            pip install -r requirements.txt
-            python .github/scripts/add_build_info.py
-            pyinstaller build.spec --upx-dir C:\\upx
+          echo "Running Linux x64 native build..."
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl
+          pip install pyinstaller
+          pip install -r requirements.txt
+          python .github/scripts/add_build_info.py
+          pyinstaller build.spec
 
-          # ------------------- Linux Native x64 Build -------------------
-          elif [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.arch }}" = "x64" ]; then
-            echo "Running Linux x64 native build..."
-            sudo apt-get update
-            sudo apt-get install -y upx-ucl
-            pip install pyinstaller
-            pip install -r requirements.txt
-            python .github/scripts/add_build_info.py
-            pyinstaller build.spec
-
-          # ------------------- Linux Cross-Compile arm64 Build -------------------
-          elif [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.arch }}" = "arm64" ]; then
-            echo "Running Linux arm64 cross-compile build..."
-            # 使用一个arm64架构的Docker容器来执行所有构建命令
-            # --platform linux/arm64 告诉Docker即使在x86主机上也要拉取和运行arm64镜像
-            # -v ${{ github.workspace }}:/src 将当前代码目录挂载到容器的/src目录
-            docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/src \
-              python:3.12-slim-bookworm \
-              sh -c "cd /src && \
-                apt-get update && apt-get install -y upx-ucl && \
-                pip install pyinstaller && \
-                pip install -r requirements.txt && \
-                python .github/scripts/add_build_info.py && \
-                pyinstaller build.spec"
-          fi
+      # <--- 修改: 将Linux arm64构建分为独立的一步
+      - name: Install and Build on Linux arm64 (Cross-Compile)
+        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          echo "Running Linux arm64 cross-compile build..."
+          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/src `
+            python:3.12-slim-bookworm `
+            sh -c "cd /src && `
+              apt-get update && apt-get install -y upx-ucl && `
+              pip install pyinstaller && `
+              pip install -r requirements.txt && `
+              python .github/scripts/add_build_info.py && `
+              pyinstaller build.spec"
 
       - name: Rename output files
         shell: bash
@@ -110,7 +110,6 @@ jobs:
   Publish:
     needs: Build
     runs-on: ubuntu-latest
-    # Publish Job 保持不变
     steps:
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@v2
