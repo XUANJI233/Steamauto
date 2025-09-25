@@ -11,21 +11,20 @@ jobs:
         include:
           - os: windows-latest
             name: windows-x64
-            standalone_arch: '' # Not used for Windows
+            standalone_arch: ''
           - os: ubuntu-latest
             name: ubuntu-x64
-            standalone_arch: 'x86_64' # Arch name for python-build-standalone
-          # 关键修正：完全按照您的要求使用 ubuntu-24.04-arm runner
+            standalone_arch: 'x86_64'
           - os: ubuntu-24.04-arm
             name: ubuntu-arm64
-            standalone_arch: 'aarch64' # Arch name for python-build-standalone
+            standalone_arch: 'aarch64'
 
     runs-on: ${{ matrix.os }}
     
     steps:
       - uses: actions/checkout@v4
 
-      # --- 为 Windows 使用标准的 setup-python ---
+      # --- 1. 为 Windows 使用标准的 setup-python ---
       - name: Set up Python for Windows
         if: runner.os == 'Windows'
         uses: actions/setup-python@v5
@@ -33,36 +32,45 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
-      # --- 为 Linux (x64 和 ARM64) 手动下载并设置静态链接的 Python ---
-      - name: Set up Static Python for Linux
+      # --- 2. 为 Linux 动态获取并设置最新的静态 Python ---
+      - name: Set up Static Python for Linux (Dynamic Fetch)
         if: runner.os == 'Linux'
         run: |
-          PYTHON_VERSION="3.12.4"
-          RELEASE_TAG="20240623" # A recent stable tag from the standalone project
+          # 安装 jq 用于解析 JSON API 响应
+          sudo apt-get update && sudo apt-get install -y jq
           
-          # 根据矩阵中的架构构造下载链接
-          DOWNLOAD_URL="https://github.com/indygreg/python-build-standalone/releases/download/${RELEASE_TAG}/cpython-${PYTHON_VERSION}+${RELEASE_TAG}-${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz"
+          PYTHON_VERSION_PREFIX="3.12" # 我们需要 3.12 系列的最新版本
+          
+          echo "Fetching latest release data from GitHub API..."
+          
+          # 从 GitHub API 获取最新发布的下载链接
+          # 这个命令会自动查找最新的发布版本中，符合架构和 Python 版本的那个文件
+          ASSET_URL=$(curl -s https://api.github.com/repos/indygreg/python-build-standalone/releases/latest | \
+                      jq -r ".assets[] | select(.name | test(\"cpython-${PYTHON_VERSION_PREFIX}.*${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz\")) | .browser_download_url")
+          
+          if [ -z "$ASSET_URL" ]; then
+            echo "::error::Could not find a download URL for Python ${PYTHON_VERSION_PREFIX} and arch ${{ matrix.standalone_arch }}. Aborting."
+            exit 1
+          fi
           
           echo "=========================================================="
-          echo "Runner OS: ${{ runner.os }}"
-          echo "Runner Arch: ${{ runner.arch }}"
+          echo "Runner OS: ${{ runner.os }} / Arch: ${{ runner.arch }}"
           echo "Target Standalone Arch: ${{ matrix.standalone_arch }}"
-          echo "Downloading from: ${DOWNLOAD_URL}"
+          echo "Dynamically found asset URL: ${ASSET_URL}"
           echo "=========================================================="
           
-          curl -L -o python.tar.gz "${DOWNLOAD_URL}"
+          curl -L -o python.tar.gz "${ASSET_URL}"
           
           mkdir -p python-static
           tar -xzf python.tar.gz -C python-static
           
           # 将静态 Python 的 bin 目录添加到 PATH
+          echo "Adding to PATH: ${{ github.workspace }}/python-static/python/bin"
           echo "${{ github.workspace }}/python-static/python/bin" >> $GITHUB_PATH
           
-          # 验证 Python 是否已正确设置
-          echo "Verifying Python installation:"
+          # 验证
           which python
           python --version
-          ls -l ${{ github.workspace }}/python-static/python/bin
 
       - name: Install UPX (Windows)
         if: runner.os == 'Windows'
@@ -84,7 +92,6 @@ jobs:
       - name: Install requirements and build
         shell: bash
         run: |
-          # 无论在哪个平台，PATH中都应该是正确的Python
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
