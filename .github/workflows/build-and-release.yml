@@ -15,81 +15,65 @@ jobs:
           - os: ubuntu-latest
             arch: x64
             name: ubuntu-x64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             arch: arm64
-            name: ubuntu-arm64
+            name: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
     
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.12"
 
-      - name: Install and Build on Windows
+      - name: Install UPX (Windows)
         if: matrix.os == 'windows-latest'
-        shell: pwsh
         run: |
-          echo "Running Windows x64 build..."
-          $url = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
+          $url = "https://github.com/upx/upx/releases/download/v5.0.0/upx-5.0.0-win64.zip"
           $output = "upx.zip"
           Invoke-WebRequest -Uri $url -OutFile $output
-          Expand-Archive -Path $output -DestinationPath "C:\upx_temp"
-          New-Item -ItemType Directory -Path "C:\upx" -Force
-          Move-Item "C:\upx_temp\upx-*\*" "C:\upx" -Force
-          Remove-Item "C:\upx_temp", $output -Recurse -Force
-          
-          pip install pyinstaller
-          pip install -r requirements.txt
-          python .github/scripts/add_build_info.py
-          pyinstaller build.spec --upx-dir "C:\upx"
+          Expand-Archive -Path $output -DestinationPath C:\upx_temp
+          New-Item -ItemType Directory -Path C:\upx -Force
+          Move-Item C:\upx_temp\upx-5.0.0-win64\* C:\upx -Force
+          Remove-Item C:\upx_temp, $output -Recurse -Force
 
-      - name: Install and Build on Linux x64
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
-        shell: bash
+      - name: Install UPX (Linux - x64 & ARM64)
+        if: matrix.os == 'ubuntu-latest'
         run: |
-          echo "Running Linux x64 native build..."
           sudo apt-get update
           sudo apt-get install -y upx
+
+      - name: Install requirements and build
+        shell: bash
+        run: |
           pip install pyinstaller
           pip install -r requirements.txt
           python .github/scripts/add_build_info.py
-          pyinstaller build.spec
+          
+          # 修复：移除 --name 参数，因为在使用 .spec 文件时不允许使用
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            pyinstaller build.spec --upx-dir C:\\upx
+          else
+            pyinstaller build.spec
+          fi
 
-      - name: Install and Build on Linux arm64 (Cross-Compile)
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
-        shell: bash
-        run: |
-          echo "Running Linux arm64 cross-compile build..."
-          # <--- 关键修改: 将基础镜像从 bookworm 更换为更稳定的 bullseye
-          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/src \
-            python:3.12-slim-bullseye \
-            sh -c "set -e && \
-              apt-get update && \
-              apt-get install -y --no-install-recommends build-essential upx && \
-              pip install pyinstaller && \
-              pip install -r requirements.txt && \
-              python .github/scripts/add_build_info.py && \
-              pyinstaller build.spec"
-
-      - name: Rename output files
+      - name: Rename output files (修复：在构建后重命名文件)
         shell: bash
         run: |
           cd dist
+          # 根据操作系统和架构重命名输出文件
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            # Windows: 假设输出是 .exe 文件
             for file in *.exe; do
               if [ -f "$file" ]; then
                 mv "$file" "Steamauto-${{ matrix.name }}.exe"
               fi
             done
           else
+            # Linux: 假设输出是没有扩展名的可执行文件
             for file in *; do
               if [ -f "$file" ] && [ -x "$file" ] && [[ "$file" != *"."* ]]; then
                 mv "$file" "Steamauto-${{ matrix.name }}"
@@ -132,3 +116,6 @@ jobs:
         with:
           commit: "master"
           tag: ${{ env.DATE }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: releases/*
+          prerelease: true
