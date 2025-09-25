@@ -59,19 +59,18 @@ jobs:
           fi
 
       # --- ARM64 Cross-Compile Build Steps ---
-      - name: Set up QEMU for ARM64 build
+      - name: Set up QEMU and Docker Buildx for ARM64 build
         if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-buildx-action@v3
 
       - name: Install requirements and build (ARM64 via Docker)
         if: matrix.arch == 'arm64'
         shell: bash
         run: |
-          # 使用一个 arm64 架构的 python docker 镜像来执行编译
-          # --rm: 容器运行结束后自动删除
-          # -v: 将当前工作目录挂载到容器的 /src 目录
-          docker run --rm -v ${{ github.workspace }}:/src \
-            arm64v8/python:3.12-slim-bookworm \
+          # --platform: 强制 Docker 使用 linux/arm64 架构的镜像
+          # 镜像改为官方的 python 镜像，它支持多架构
+          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/src \
+            python:3.12-slim-bookworm \
             /bin/bash -c "cd /src && \
                           pip install pyinstaller && \
                           pip install -r requirements.txt && \
@@ -120,4 +119,5 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: releases/*
           prerelease: true
+
 
