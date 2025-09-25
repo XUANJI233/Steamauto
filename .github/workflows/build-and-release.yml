@@ -12,9 +12,6 @@ jobs:
           - os: windows-latest
             arch: x64
             name: windows-x64
-          - os: ubuntu-latest
-            arch: x64
-            name: ubuntu-x64
           - os: ubuntu-latest  # 重点变化：使用GitHub提供的标准Ubuntu运行器
             arch: arm64
             name: ubuntu-arm64
