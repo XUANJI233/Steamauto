@@ -68,11 +68,11 @@ jobs:
         shell: bash
         run: |
           echo "Running Linux arm64 cross-compile build..."
-          # <--- 关键修改: 将 PowerShell 的换行符 ` (反引号) 修改为 Bash 的换行符 \ (反斜杠)
           docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/src \
             python:3.12-slim-bookworm \
-            sh -c "cd /src && \
-              apt-get update && apt-get install -y --no-install-recommends upx-ucl && \
+            sh -c "set -e && \
+              apt-get update && \
+              apt-get install -y --no-install-recommends build-essential upx-ucl && \
               pip install pyinstaller && \
               pip install -r requirements.txt && \
               python .github/scripts/add_build_info.py && \
