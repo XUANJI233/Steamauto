@@ -32,31 +32,33 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
-      # --- 2. 为 Linux 动态获取并设置最新的静态 Python (已修复 API 调用) ---
+      # --- 2. 为 Linux 动态获取并设置最新的静态 Python (最终修正版) ---
       - name: Set up Static Python for Linux
         if: runner.os == 'Linux'
         env:
-          # 将 GITHUB_TOKEN 传入脚本环境
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sudo apt-get update && sudo apt-get install -y jq
           
           PYTHON_VERSION_PREFIX="3.12"
           
-          echo "Fetching latest release data using authenticated API call..."
+          echo "Fetching list of all releases to find the latest available Python ${PYTHON_VERSION_PREFIX}..."
           
-          # 关键修正：在 curl 命令中加入 Authorization 请求头，使用 GITHUB_TOKEN 进行认证，避免速率限制
-          API_RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/indygreg/python-build-standalone/releases/latest)
+          # 关键修正：查询 /releases 获取所有发布版本的列表，而不是 /latest
+          API_RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/indygreg/python-build-standalone/releases)
           
-          ASSET_URL=$(echo "$API_RESPONSE" | jq -r ".assets[] | select(.name | test(\"cpython-${PYTHON_VERSION_PREFIX}.*${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz\")) | .browser_download_url")
+          # 关键修正：使用新的 jq 查询逻辑，遍历所有版本，找到第一个包含目标文件的版本，然后提取其下载链接
+          ASSET_URL=$(echo "$API_RESPONSE" | \
+                      jq -r '[.[] | .assets[] | select(.name? and (.name | test("cpython-${PYTHON_VERSION_PREFIX}.*${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz")))] | .[0].browser_download_url')
           
           if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "::error::Could not find a download URL for Python ${PYTHON_VERSION_PREFIX} and arch ${{ matrix.standalone_arch }}."
-            echo "API Response: $API_RESPONSE" # 打印API响应以供调试
+            echo "::error::Could not find a download URL for Python ${PYTHON_VERSION_PREFIX} and arch ${{ matrix.standalone_arch }} across all releases."
+            # 打印前500个字符的API响应以供调试，避免日志过长
+            echo "API Response (first 500 chars): $(echo "$API_RESPONSE" | head -c 500)"
             exit 1
           fi
           
-          echo "Found asset URL: ${ASSET_URL}"
+          echo "Successfully found asset URL: ${ASSET_URL}"
           
           curl -L -o python.tar.gz "${ASSET_URL}"
           
