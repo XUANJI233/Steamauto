@@ -32,40 +32,37 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
-      # --- 2. 为 Linux 动态获取并设置最新的静态 Python ---
-      - name: Set up Static Python for Linux (Dynamic Fetch)
+      # --- 2. 为 Linux 动态获取并设置最新的静态 Python (已修复 API 调用) ---
+      - name: Set up Static Python for Linux
         if: runner.os == 'Linux'
+        env:
+          # 将 GITHUB_TOKEN 传入脚本环境
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 安装 jq 用于解析 JSON API 响应
           sudo apt-get update && sudo apt-get install -y jq
           
-          PYTHON_VERSION_PREFIX="3.12" # 我们需要 3.12 系列的最新版本
+          PYTHON_VERSION_PREFIX="3.12"
           
-          echo "Fetching latest release data from GitHub API..."
+          echo "Fetching latest release data using authenticated API call..."
           
-          # 从 GitHub API 获取最新发布的下载链接
-          # 这个命令会自动查找最新的发布版本中，符合架构和 Python 版本的那个文件
-          ASSET_URL=$(curl -s https://api.github.com/repos/indygreg/python-build-standalone/releases/latest | \
-                      jq -r ".assets[] | select(.name | test(\"cpython-${PYTHON_VERSION_PREFIX}.*${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz\")) | .browser_download_url")
+          # 关键修正：在 curl 命令中加入 Authorization 请求头，使用 GITHUB_TOKEN 进行认证，避免速率限制
+          API_RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/indygreg/python-build-standalone/releases/latest)
           
-          if [ -z "$ASSET_URL" ]; then
-            echo "::error::Could not find a download URL for Python ${PYTHON_VERSION_PREFIX} and arch ${{ matrix.standalone_arch }}. Aborting."
+          ASSET_URL=$(echo "$API_RESPONSE" | jq -r ".assets[] | select(.name | test(\"cpython-${PYTHON_VERSION_PREFIX}.*${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz\")) | .browser_download_url")
+          
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            echo "::error::Could not find a download URL for Python ${PYTHON_VERSION_PREFIX} and arch ${{ matrix.standalone_arch }}."
+            echo "API Response: $API_RESPONSE" # 打印API响应以供调试
             exit 1
           fi
           
-          echo "=========================================================="
-          echo "Runner OS: ${{ runner.os }} / Arch: ${{ runner.arch }}"
-          echo "Target Standalone Arch: ${{ matrix.standalone_arch }}"
-          echo "Dynamically found asset URL: ${ASSET_URL}"
-          echo "=========================================================="
+          echo "Found asset URL: ${ASSET_URL}"
           
           curl -L -o python.tar.gz "${ASSET_URL}"
           
           mkdir -p python-static
           tar -xzf python.tar.gz -C python-static
           
-          # 将静态 Python 的 bin 目录添加到 PATH
-          echo "Adding to PATH: ${{ github.workspace }}/python-static/python/bin"
           echo "${{ github.workspace }}/python-static/python/bin" >> $GITHUB_PATH
           
           # 验证
