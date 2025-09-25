@@ -6,10 +6,8 @@ on:
 
 jobs:
   Build:
-    # 使用 strategy.matrix 策略来定义不同的编译平台
     strategy:
       matrix:
-        # include 允许我们定义更复杂的组合
         include:
           - os: windows-latest
             arch: x64
@@ -17,7 +15,7 @@ jobs:
           - os: ubuntu-latest
             arch: x64
             name: ubuntu-x64
-          - os: ubuntu-latest
+          - os: ubuntu-latest  # 重点变化：使用GitHub提供的标准Ubuntu运行器
             arch: arm64
             name: ubuntu-arm64
 
@@ -27,11 +25,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@main
+        uses: actions/setup-python@v4
         with:
           python-version: "3.12"
 
-      # --- Windows x64 Native Build Steps ---
       - name: Install UPX (Windows)
         if: matrix.os == 'windows-latest'
         run: |
@@ -43,45 +40,29 @@ jobs:
           Move-Item C:\upx_temp\upx-5.0.0-win64\* C:\upx -Force
           Remove-Item C:\upx_temp, $output -Recurse -Force
 
-      # --- Native Build (Windows x64 & Ubuntu x64) ---
-      - name: Install requirements and build (Native)
-        if: matrix.arch != 'arm64'
+      - name: Install UPX (Linux - x64 & ARM64)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx
+
+      - name: Install requirements and build
         shell: bash
         run: |
           pip install pyinstaller
           pip install -r requirements.txt
           python .github/scripts/add_build_info.py
           
+          # 统一构建命令，输出文件根据矩阵中的name命名
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            pyinstaller build.spec --upx-dir C:\\upx
+            pyinstaller build.spec --upx-dir C:\\upx --name "Steamauto-${{ matrix.name }}"
           else
-            pyinstaller build.spec
+            pyinstaller build.spec --name "Steamauto-${{ matrix.name }}"
           fi
 
-      # --- ARM64 Cross-Compile Build Steps ---
-      - name: Set up QEMU and Docker Buildx for ARM64 build
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install requirements and build (ARM64 via Docker)
-        if: matrix.arch == 'arm64'
-        shell: bash
-        run: |
-          # --platform: 强制 Docker 使用 linux/arm64 架构的镜像
-          # 镜像改为官方的 python 镜像，它支持多架构
-          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/src \
-            python:3.12-slim-bookworm \
-            /bin/bash -c "cd /src && \
-                          pip install pyinstaller && \
-                          pip install -r requirements.txt && \
-                          python .github/scripts/add_build_info.py && \
-                          pyinstaller build.spec"
-      
-      # --- Artifact Upload ---
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          # 使用矩阵中的 name 字段来命名产物，更清晰
           name: ${{ matrix.name }}-dist
           path: dist
           retention-days: 3
@@ -91,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Repository Dispatch
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v2
         with:
           token: ${{ secrets.PAT }}
           repository: jiajiaxd/Steamauto-Tutorial
@@ -100,7 +81,6 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          # 不指定 name，会下载所有产物到指定目录
           path: ./Steamauto
 
       - name: Finalization
@@ -108,7 +88,6 @@ jobs:
           sudo timedatectl set-timezone "Asia/Shanghai"
           echo "DATE=$(date +"%Y%m%d-%H%M")" >> $GITHUB_ENV
           mkdir releases
-          # 使用通配符将所有下载的产物文件夹中的内容移动到 releases 目录
           mv Steamauto/*-dist/* releases/
 
       - name: Upload to Github Releases
@@ -119,5 +98,3 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: releases/*
           prerelease: true
-
-
