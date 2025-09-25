@@ -12,27 +12,57 @@ jobs:
           - os: windows-latest
             arch: x64
             name: windows-x64
+            python_arch: x64 # For setup-python on Windows
+            standalone_arch: "" # Not used on Windows
           - os: ubuntu-latest
             arch: x64
             name: ubuntu-x64
-          - os: ubuntu-latest  # 修改：为了使用静态Python构建，我们可以在标准的ubuntu-latest上交叉编译或使用原生runner
+            python_arch: x64 # Fallback for setup-python
+            standalone_arch: "x86_64" # Arch name for standalone builds
+          - os: ubuntu-latest
             arch: aarch64
             name: ubuntu-arm64
+            python_arch: x64 # Runner's native arch
+            standalone_arch: "aarch64" # Arch name for standalone builds
 
     runs-on: ${{ matrix.os }}
     
     steps:
       - uses: actions/checkout@v4
 
-      # 关键修改：为所有构建设置Python，特别是为Linux构建使用静态链接的独立版本
-      - name: Set up Python
-        uses: actions/setup-python@v5 # 建议使用最新的主版本
+      # --- 关键修改：分操作系统设置Python ---
+
+      # 1. 为 Windows 使用标准的 setup-python
+      - name: Set up Python for Windows
+        if: matrix.os == 'windows-latest'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          # 仅在Linux上使用独立（静态链接）的Python构建
-          # 这将下载一个使用 musl libc 编译的Python，从而生成静态链接的可执行文件
-          python-build: ${{ runner.os == 'Linux' && 'standalone' || '' }}
-          architecture: ${{ matrix.arch }}
+          architecture: ${{ matrix.python_arch }}
+
+      # 2. 为 Linux 手动下载并设置静态链接的 Python
+      - name: Set up Static Python for Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          PYTHON_VERSION="3.12.4" # Specify a concrete version available
+          RELEASE_TAG="20240623" # Tag from python-build-standalone releases
+          
+          # Construct the download URL based on architecture
+          DOWNLOAD_URL="https://github.com/indygreg/python-build-standalone/releases/download/${RELEASE_TAG}/cpython-${PYTHON_VERSION}+${RELEASE_TAG}-${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz"
+          
+          echo "Downloading from ${DOWNLOAD_URL}"
+          curl -L -o python.tar.gz "${DOWNLOAD_URL}"
+          
+          # Extract and set up
+          mkdir -p python-static
+          tar -xzf python.tar.gz -C python-static
+          
+          # Add the static python's bin directory to the PATH for subsequent steps
+          echo "${{ github.workspace }}/python-static/python/bin" >> $GITHUB_PATH
+          
+          # Verify the python version and path
+          which python
+          python --version
 
       - name: Install UPX (Windows)
         if: matrix.os == 'windows-latest'
@@ -45,7 +75,6 @@ jobs:
           Move-Item C:\upx_temp\upx-5.0.0-win64\* C:\upx -Force
           Remove-Item C:\upx_temp, $output -Recurse -Force
 
-      # 修复：确保在所有Linux构建（x64和ARM）上都安装UPX
       - name: Install UPX (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -55,15 +84,17 @@ jobs:
       - name: Install requirements and build
         shell: bash
         run: |
+          # The correct python (static on Linux) is now in the PATH
+          python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
           python .github/scripts/add_build_info.py
           
-          # 对于Windows，指定UPX路径；对于Linux，UPX应该在PATH中
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             pyinstaller build.spec --upx-dir C:\\upx
           else
-            pyinstaller build.spec --upx-dir /usr/bin/upx
+            # For Linux, UPX is in the PATH, PyInstaller will find it
+            pyinstaller build.spec
           fi
 
       - name: Rename output files
@@ -73,10 +104,6 @@ jobs:
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             mv *.exe "Steamauto-${{ matrix.name }}.exe"
           else
-            # 找到dist目录下的主可执行文件并重命名
-            # PyInstaller生成的可执行文件名与.spec文件中的`name`字段一致
-            # 假设spec文件中的name是'main'或类似的
-            # 一个更稳健的方法是找到那个没有扩展名的可执行文件
             EXECUTABLE_NAME=$(find . -maxdepth 1 -type f ! -name "*.*" | head -n 1)
             if [ -n "$EXECUTABLE_NAME" ]; then
               mv "$EXECUTABLE_NAME" "Steamauto-${{ matrix.name }}"
