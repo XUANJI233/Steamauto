@@ -10,62 +10,62 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            arch: x64
             name: windows-x64
-            python_arch: x64 # For setup-python on Windows
-            standalone_arch: "" # Not used on Windows
+            standalone_arch: '' # Not used for Windows
           - os: ubuntu-latest
-            arch: x64
             name: ubuntu-x64
-            python_arch: x64 # Fallback for setup-python
-            standalone_arch: "x86_64" # Arch name for standalone builds
-          - os: ubuntu-latest
-            arch: aarch64
+            standalone_arch: 'x86_64' # Arch name for python-build-standalone
+          # 关键修正：完全按照您的要求使用 ubuntu-24.04-arm runner
+          - os: ubuntu-24.04-arm
             name: ubuntu-arm64
-            python_arch: x64 # Runner's native arch
-            standalone_arch: "aarch64" # Arch name for standalone builds
+            standalone_arch: 'aarch64' # Arch name for python-build-standalone
 
     runs-on: ${{ matrix.os }}
     
     steps:
       - uses: actions/checkout@v4
 
-      # --- 关键修改：分操作系统设置Python ---
-
-      # 1. 为 Windows 使用标准的 setup-python
+      # --- 为 Windows 使用标准的 setup-python ---
       - name: Set up Python for Windows
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          architecture: ${{ matrix.python_arch }}
+          architecture: x64
 
-      # 2. 为 Linux 手动下载并设置静态链接的 Python
+      # --- 为 Linux (x64 和 ARM64) 手动下载并设置静态链接的 Python ---
       - name: Set up Static Python for Linux
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
-          PYTHON_VERSION="3.12.4" # Specify a concrete version available
-          RELEASE_TAG="20240623" # Tag from python-build-standalone releases
+          PYTHON_VERSION="3.12.4"
+          RELEASE_TAG="20240623" # A recent stable tag from the standalone project
           
-          # Construct the download URL based on architecture
+          # 根据矩阵中的架构构造下载链接
           DOWNLOAD_URL="https://github.com/indygreg/python-build-standalone/releases/download/${RELEASE_TAG}/cpython-${PYTHON_VERSION}+${RELEASE_TAG}-${{ matrix.standalone_arch }}-unknown-linux-musl-install_only.tar.gz"
           
-          echo "Downloading from ${DOWNLOAD_URL}"
+          echo "=========================================================="
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Arch: ${{ runner.arch }}"
+          echo "Target Standalone Arch: ${{ matrix.standalone_arch }}"
+          echo "Downloading from: ${DOWNLOAD_URL}"
+          echo "=========================================================="
+          
           curl -L -o python.tar.gz "${DOWNLOAD_URL}"
           
-          # Extract and set up
           mkdir -p python-static
           tar -xzf python.tar.gz -C python-static
           
-          # Add the static python's bin directory to the PATH for subsequent steps
+          # 将静态 Python 的 bin 目录添加到 PATH
           echo "${{ github.workspace }}/python-static/python/bin" >> $GITHUB_PATH
           
-          # Verify the python version and path
+          # 验证 Python 是否已正确设置
+          echo "Verifying Python installation:"
           which python
           python --version
+          ls -l ${{ github.workspace }}/python-static/python/bin
 
       - name: Install UPX (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         run: |
           $url = "https://github.com/upx/upx/releases/download/v5.0.0/upx-5.0.0-win64.zip"
           $output = "upx.zip"
@@ -84,16 +84,15 @@ jobs:
       - name: Install requirements and build
         shell: bash
         run: |
-          # The correct python (static on Linux) is now in the PATH
+          # 无论在哪个平台，PATH中都应该是正确的Python
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
           python .github/scripts/add_build_info.py
           
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ "${{ runner.os }}" = "Windows" ]; then
             pyinstaller build.spec --upx-dir C:\\upx
           else
-            # For Linux, UPX is in the PATH, PyInstaller will find it
             pyinstaller build.spec
           fi
 
@@ -101,7 +100,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ "${{ runner.os }}" = "Windows" ]; then
             mv *.exe "Steamauto-${{ matrix.name }}.exe"
           else
             EXECUTABLE_NAME=$(find . -maxdepth 1 -type f ! -name "*.*" | head -n 1)
