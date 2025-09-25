@@ -57,7 +57,8 @@ jobs:
         run: |
           echo "Running Linux x64 native build..."
           sudo apt-get update
-          sudo apt-get install -y upx-ucl
+          # <--- 关键修改: 修正包名为 upx
+          sudo apt-get install -y upx
           pip install pyinstaller
           pip install -r requirements.txt
           python .github/scripts/add_build_info.py
@@ -72,7 +73,7 @@ jobs:
             python:3.12-slim-bookworm \
             sh -c "set -e && \
               apt-get update && \
-              apt-get install -y --no-install-recommends build-essential upx-ucl && \
+              apt-get install -y --no-install-recommends build-essential upx && \
               pip install pyinstaller && \
               pip install -r requirements.txt && \
               python .github/scripts/add_build_info.py && \
